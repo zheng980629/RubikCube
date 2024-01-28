@@ -1,0 +1,67 @@
+name: deepDeblur_RubikCube
+model_type: deepDeblurModel
+scale: 1
+num_gpu: 1  # set num_gpu: 0 for cpu mode
+manual_seed: 10
+#### datasets
+
+datasets:
+  test_1:  # the 1st test dataset
+    name: GoPro
+    type: PairedImageDataset
+    dataroot_gt: /motionDeblur/GoPro/test/target
+    dataroot_lq: /motionDeblur/GoPro/test/input
+    io_backend:
+      type: disk
+  test_2:  # the 1st test dataset
+    name: HIDE
+    type: PairedImageDataset
+    dataroot_gt: /motionDeblur/HIDE/target
+    dataroot_lq: /motionDeblur/HIDE/input
+    io_backend:
+      type: disk
+  test_3:  # the 1st test dataset
+    name: RealBlur-J
+    type: PairedImageDataset
+    dataroot_gt: /motionDeblur/RealBlur_J/target
+    dataroot_lq: /motionDeblur/RealBlur_J/input
+    io_backend:
+      type: disk
+  test_4:  # the 1st test dataset
+    name: RealBlur-R
+    type: PairedImageDataset
+    dataroot_gt: /motionDeblur/RealBlur_R/target
+    dataroot_lq: /motionDeblur/RealBlur_R/input
+    io_backend:
+      type: disk
+
+
+#### network structures
+network_g:
+  type: DeepDeblur_RubikConv
+  rgb_range: 1.0
+  n_resblocks: 19
+  n_feats: 64
+  n_scales: 3
+  kernel_size: 5
+  shiftPixel: 1
+  gc: 8
+
+#### path
+path:
+  pretrain_network_g: 
+  # param_key_g: params_ema
+
+val:
+  save_img: true
+  suffix: ~  # add suffix to saved images, if None, use exp name
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      type: calculate_psnr
+      crop_border: 0
+      test_y_channel: false
+    SSIM: # metric name, can be arbitrary
+      type: calculate_ssim
+      crop_border: 0
+      test_y_channel: false
