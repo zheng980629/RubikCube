@@ -65,6 +65,8 @@ python /RubikCube/test.py -opt /RubikCube/options/test/deblur/MPRNet_deblur_Rubi
 ```
 evaluate_GoPro.m
 ```
+### 🚀: Guided Image Super-Resolution
+Training pre-trained models of INNFormer, MutNet, and PANNet are released in [Google Drive](https://drive.google.com/drive/folders/1rJHoc1vAWUgR5ZckFMditxZAMOlsqvty?usp=drive_link).
 ### 🚀: Classification
 Training codes and pre-trained models of AlexNet, VGG-16, and ResNet-18 are released in [Google Drive](https://drive.google.com/drive/folders/1uGyYqR-VAeg9GD3_WpAFlZZJt4u6DZAh?usp=drive_link).
 ## Acknowledgement
