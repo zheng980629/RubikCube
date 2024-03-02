@@ -3,12 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pdb import set_trace as stx
 import numbers
-
-from einops import rearrange
-
-from basicsr.archs.arch_util import ResidualBlockNoBN, Upsample, make_layer
+from basicsr.archs.arch_util import ResidualBlockNoBN, Upsample, make_layer, default_init_weights_constant
 from basicsr.utils.registry import ARCH_REGISTRY
 import torch.nn.functional as F
+
+from einops import rearrange
 
 class RubikCube_multiply(nn.Module):
     def __init__(self, nc, out, shiftPixel=1, gc=4):
@@ -16,27 +15,27 @@ class RubikCube_multiply(nn.Module):
 
         self.processC1 = nn.Sequential(
             nn.Conv2d(gc, gc, kernel_size=1, padding=0, stride=1),
-            nn.LeakyReLU(0.1, inplace=True)
+            nn.LeakyReLU(0.0, inplace=True)
         )
 
         self.processC2 = nn.Sequential(
             nn.Conv2d(gc, gc, kernel_size=1, padding=0, stride=1),
-            nn.LeakyReLU(0.1, inplace=True)
+            nn.LeakyReLU(0.0, inplace=True)
         )
 
         self.processC3 = nn.Sequential(
             nn.Conv2d(gc, gc, kernel_size=1, padding=0, stride=1),
-            nn.LeakyReLU(0.1, inplace=True)
+            nn.LeakyReLU(0.0, inplace=True)
         )
 
         self.processC4 = nn.Sequential(
             nn.Conv2d(gc, gc, kernel_size=1, padding=0, stride=1),
-            nn.LeakyReLU(0.1, inplace=True)
+            nn.LeakyReLU(0.0, inplace=True)
         )
 
         self.processOutput = nn.Sequential(
             nn.Conv2d(nc, out, kernel_size=1, padding=0, stride=1),
-            nn.LeakyReLU(0.1, inplace=True)
+            nn.LeakyReLU(0.0, inplace=True)
         )
 
         self.shiftPixel = shiftPixel
@@ -53,6 +52,7 @@ class RubikCube_multiply(nn.Module):
         out[:, g * 3:g * 4, 1:, :] = x[:, g * 3:g * 4, :-1, :]  # shift down
 
         out[:, g * 4:, :, :] = x[:, g * 4:, :, :]  # no shift
+        
         return out
 
     def forward(self, x):
@@ -67,8 +67,7 @@ class RubikCube_multiply(nn.Module):
 
         out = torch.cat([c1_processed, c2_processed, c3_processed, c4_processed, x2], dim=1)
 
-        return self.processOutput(out) + residual
-
+        return self.processOutput(out)
 
 ##########################################################################
 ## Layer Norm
@@ -150,6 +149,7 @@ class FeedForward(nn.Module):
         return x
 
 
+
 ##########################################################################
 ## Multi-DConv Head Transposed Self-Attention (MDTA)
 class Attention(nn.Module):
@@ -191,21 +191,38 @@ class Attention(nn.Module):
 
 ##########################################################################
 class TransformerBlock(nn.Module):
-    def __init__(self, dim, num_heads, ffn_expansion_factor, bias, LayerNorm_type, shiftPixel, gc):
+    def __init__(self, dim, num_heads, ffn_expansion_factor, bias, LayerNorm_type):
         super(TransformerBlock, self).__init__()
 
         self.norm1 = LayerNorm(dim, LayerNorm_type)
         self.attn = Attention(dim, num_heads, bias)
         self.norm2 = LayerNorm(dim, LayerNorm_type)
         self.ffn = FeedForward(dim, ffn_expansion_factor, bias)
-        self.ffn_1 = RubikCube_multiply(dim, dim, shiftPixel, gc)
-                                 
 
     def forward(self, x):
         x = x + self.attn(self.norm1(x))
-        x = x + self.ffn_1(self.ffn(self.norm2(x)))
+        x = x + self.ffn(self.norm2(x))
 
         return x
+
+
+class TransformerBlock_rubikConv(nn.Module):
+    def __init__(self, dim, num_heads, ffn_expansion_factor, bias, LayerNorm_type):
+        super(TransformerBlock_rubikConv, self).__init__()
+
+        self.norm1 = LayerNorm(dim, LayerNorm_type)
+        self.attn = Attention(dim, num_heads, bias)
+        self.norm2 = LayerNorm(dim, LayerNorm_type)
+        self.ffn = FeedForward(dim, ffn_expansion_factor, bias)
+        self.ffn1_1 = RubikCube_multiply(dim, dim, 1, 8)
+        default_init_weights_constant(self.ffn1_1, 0.0)
+
+    def forward(self, x):
+        x = x + self.attn(self.norm1(x))
+        x = x + self.ffn(self.norm2(x)) + self.ffn1_1(self.norm2(x))
+
+        return x
+
 
 
 ##########################################################################
@@ -258,39 +275,38 @@ class Restormer_RubikConv(nn.Module):
         ffn_expansion_factor = 2.66,
         bias = False,
         LayerNorm_type = 'WithBias',   ## Other option 'BiasFree'
-        dual_pixel_task = False,         ## True for dual-pixel defocus deblurring only. Also set inp_channels=6
-        shiftPixel = 1
+        dual_pixel_task = False        ## True for dual-pixel defocus deblurring only. Also set inp_channels=6
     ):
 
         super(Restormer_RubikConv, self).__init__()
 
         self.patch_embed = OverlapPatchEmbed(inp_channels, dim)
 
-        self.encoder_level1 = nn.Sequential(*[TransformerBlock(dim=dim, num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type, shiftPixel=shiftPixel, gc=8) for i in range(num_blocks[0])])
+        self.encoder_level1 = nn.Sequential(*[TransformerBlock_rubikConv(dim=dim, num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[0])])
         
         self.down1_2 = Downsample(dim) ## From Level 1 to Level 2
-        self.encoder_level2 = nn.Sequential(*[TransformerBlock(dim=int(dim*2**1), num_heads=heads[1], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type, shiftPixel=shiftPixel, gc=8) for i in range(num_blocks[1])])
+        self.encoder_level2 = nn.Sequential(*[TransformerBlock(dim=int(dim*2**1), num_heads=heads[1], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[1])])
         
         self.down2_3 = Downsample(int(dim*2**1)) ## From Level 2 to Level 3
-        self.encoder_level3 = nn.Sequential(*[TransformerBlock(dim=int(dim*2**2), num_heads=heads[2], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type, shiftPixel=shiftPixel, gc=8) for i in range(num_blocks[2])])
+        self.encoder_level3 = nn.Sequential(*[TransformerBlock(dim=int(dim*2**2), num_heads=heads[2], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[2])])
 
         self.down3_4 = Downsample(int(dim*2**2)) ## From Level 3 to Level 4
-        self.latent = nn.Sequential(*[TransformerBlock(dim=int(dim*2**3), num_heads=heads[3], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type, shiftPixel=shiftPixel, gc=8) for i in range(num_blocks[3])])
+        self.latent = nn.Sequential(*[TransformerBlock(dim=int(dim*2**3), num_heads=heads[3], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[3])])
         
         self.up4_3 = Upsample(int(dim*2**3)) ## From Level 4 to Level 3
         self.reduce_chan_level3 = nn.Conv2d(int(dim*2**3), int(dim*2**2), kernel_size=1, bias=bias)
-        self.decoder_level3 = nn.Sequential(*[TransformerBlock(dim=int(dim*2**2), num_heads=heads[2], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type, shiftPixel=shiftPixel, gc=8) for i in range(num_blocks[2])])
+        self.decoder_level3 = nn.Sequential(*[TransformerBlock(dim=int(dim*2**2), num_heads=heads[2], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[2])])
 
 
         self.up3_2 = Upsample(int(dim*2**2)) ## From Level 3 to Level 2
         self.reduce_chan_level2 = nn.Conv2d(int(dim*2**2), int(dim*2**1), kernel_size=1, bias=bias)
-        self.decoder_level2 = nn.Sequential(*[TransformerBlock(dim=int(dim*2**1), num_heads=heads[1], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type, shiftPixel=shiftPixel, gc=8) for i in range(num_blocks[1])])
+        self.decoder_level2 = nn.Sequential(*[TransformerBlock(dim=int(dim*2**1), num_heads=heads[1], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[1])])
         
         self.up2_1 = Upsample(int(dim*2**1))  ## From Level 2 to Level 1  (NO 1x1 conv to reduce channels)
 
-        self.decoder_level1 = nn.Sequential(*[TransformerBlock(dim=int(dim*2**1), num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type, shiftPixel=shiftPixel, gc=8) for i in range(num_blocks[0])])
+        self.decoder_level1 = nn.Sequential(*[TransformerBlock(dim=int(dim*2**1), num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[0])])
         
-        self.refinement = nn.Sequential(*[TransformerBlock(dim=int(dim*2**1), num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type, shiftPixel=shiftPixel, gc=8) for i in range(num_refinement_blocks)])
+        self.refinement = nn.Sequential(*[TransformerBlock(dim=int(dim*2**1), num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_refinement_blocks)])
         
         #### For Dual-Pixel Defocus Deblurring Task ####
         self.dual_pixel_task = dual_pixel_task
@@ -299,7 +315,6 @@ class Restormer_RubikConv(nn.Module):
         ###########################
             
         self.output = nn.Conv2d(int(dim*2**1), out_channels, kernel_size=3, stride=1, padding=1, bias=bias)
-
 
     def forward(self, inp_img):
 
@@ -339,4 +354,6 @@ class Restormer_RubikConv(nn.Module):
         else:
             out_dec_level1 = self.output(out_dec_level1) + inp_img
 
+
         return out_dec_level1
+
